@@ -3,15 +3,17 @@
 This repo contains a collection of scripts which I made for a little game project using procedural stylized terrain generation.
 While the game prototype never ended as a full pledge game, I thought that some of these scripts might be of use to some people. 
 
+For access to the latest prototype where this code is used, please email niels.pichon@outlook.com
+
 ## Content
 
 * `AMapGenerator.cpp`: This is the main file which governs them all. Essentially, it sequentially generates a square map from Perlin noise, 
 then randomly picks some handmade landmarks (e.g. an Aztec temple, or some dynausaur rib cage in the sand) and spreads them randomly on the map,
 mathes the noise level so that each landmark is on flat ground at the right altitude (defined in the landmark actor). It then tries desparately to
 smooth the terrain so that there would not be too steep terrain. This part currently still has a couple bugs unfortunately which will leave some gaps open.
-Then the noise is terrassed in a set number of levels, and each level is clustered. Finally the various clustered are extruded and there edges somewhat smoothed,
-to avoid having a minecraft look.
-
+Then the noise is terrassed in a set number of levels, and each level is clustered. Finally the various clustered are extruded.
+This file also contains everything need to spread the rocks, trees and clouds around the map with the appropriate appearance based on the different bioms.
+* Other scripts to define the various other classes to be spawend randomly to inhabit the world
 
 
 ## License

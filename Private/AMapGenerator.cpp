@@ -259,7 +259,8 @@ void AAMapGenerator::GenerateMesh()
 
 			//find which biom the mesh is in
 			int itt = 0;
-			while (floor(inGameBioms[itt]->biomSeparation * (mapLevels-1)) < depth) itt++;
+			while (floor(inGameBioms[itt]->biomSeparation * (mapLevels-1)) < depth)
+				itt++;
 
 			meshes[meshes.Num() - 1]->biom = inGameBioms[itt];
 		}
@@ -319,93 +320,7 @@ void AAMapGenerator::SpawnClouds()
 }
 
 
-// This is a buggy method to check whether a location is diggable, that is whether it is on ground and not
-// to close to the edge.
-// TODO: It is not working right now (may spawn overlapping an edge) and I am wondering whether
-// this is because of fp issues or simply flawed logic
-bool AAMapGenerator::CheckCanDig(FVector location, float holeRadius)
-{
-	bool canDig = true;
-
-7	// cast the location and scale of hole to the map referential
-	float Xc = location.X / globalScale;
-	float Yc = location.Y / globalScale;
-
-	float radius = holeRadius / globalScale;
-
-	for (int i = 0; i < 10; i++) 
-	{
-		for (int j = 0; j < 10; j++) {
-			float X = Xc + i * radius / 9 - radius * 0.5;
-			float Y = Yc + j * radius / 9 - radius * 0.5;
-			if (noiseMap[(int)(round(Y) * mapSize + round(X))]!= noiseMap[(int)(round(Yc) * mapSize + round(Xc))])
-			{
-				canDig = false;
-				break;
-			}
-		}
-
-		if (!canDig)
-			break;
-	}
-
-	return canDig;
-}
-
-void AAMapGenerator::RemoveVertsWithinRadius(TArray<FVector> inVerts, TArray<int> inTris, TArray<FVector2D> inUVs, FVector centre, float radius, TArray<FVector>& outVerts, TArray<int>& outTris, TArray<FVector2D>& outUVs)
-{
-	outVerts = inVerts;
-	outUVs = inUVs;
-	outTris = inTris;
-
-	int idx = 0;
-	while (idx < outVerts.Num()) 
-	{
-		FVector scaledVert = outVerts[idx] * globalScale;
-		float dist = FVector::DistXY(scaledVert, centre);
-
-		//if within hole distance, delete vert and corresponding uv and tris
-		if (dist <= radius) 
-		{
-
-			//if (GEngine)
-				//GEngine->AddOnScreenDebugMessage(-1, 15.0f, FColor::Yellow, TEXT("Removing vert"));
-
-			outVerts.RemoveAt(idx);
-			outUVs.RemoveAt(idx);
-
-			int i = 0;
-			//flick through tris to account for deleted vertex
-			while (i < outTris.Num()) {
-				//If refering to verts further in the array, just offset vert idx by one
-				if (outTris[i] > idx)
-				{
-					outTris[i]--;
-					i++;
-				}
-				//if refering to vert to remove, remove all 3 vertices of the triangle from the array
-				else if (outTris[i] == idx) {
-					outTris.RemoveAt((int)floor(i / 3) * 3);
-					outTris.RemoveAt((int)floor(i / 3) * 3);
-					outTris.RemoveAt((int)floor(i / 3) * 3);
-					i = i - (i - (int)floor(i / 3) * 3);
-				}
-				else
-					i++;
-			}
-		}
-		else
-		{
-			//if (idx % 100 == 0)
-			//{
-			//	if (GEngine)
-			//		GEngine->AddOnScreenDebugMessage(-1, 15.0f, FColor::Yellow, FString::SanitizeFloat(dist));
-			//}
-			idx++;
-		}
-	}
-}
-
+// This is used to generate a minimap of the randomly generated map
 UTexture2D* AAMapGenerator::GenerateMapTexture(int resolution)
 {
 	//init the texture in 8 bit RGBA with the noise texture size
@@ -419,8 +334,11 @@ UTexture2D* AAMapGenerator::GenerateMapTexture(int resolution)
 		for (int x = 0; x < mapSize; x++) 
 		{
 			int location = x * mapSize + y;
+			// Note that y is upside down compared to the noise map.
+			// That's why we use (mapSize - 1 - y) rather than mapsize
 			int imLocation = (mapSize - 1 - y) * mapSize + x;
 
+			// the map color for each pixel is retrieved from the biom
 			FLinearColor color = meshes[(int)floor(noiseMap[location] * (mapLevels - 1))] -> biom -> biomMapColor;
 
 			//store pixel value
@@ -431,14 +349,16 @@ UTexture2D* AAMapGenerator::GenerateMapTexture(int resolution)
 		}
 	}
 
+	// at this point we scale the map to match the desired resolution, by simple nearest neighbour
+	// interpolation. This way, no matter the map siwe, the minimap can have a similar size on screen
 	Data = ResampleMap(Data, mapSize, resolution);
 
+	// If needed we can somewhat smooth the map to make it less shapr and pixelized
+	// We can also add an outline to create some sort of level lines
 	if (smoothMapTexture)
 		Data = Smooth2DMap(Data);
 	else if (contourMapTexture)
 		Data = Contour2DMap(Data);
-
-	
 
 	//define texture region to update (all of it basically)
 	FUpdateTextureRegion2D* Region = new FUpdateTextureRegion2D;
@@ -449,7 +369,7 @@ UTexture2D* AAMapGenerator::GenerateMapTexture(int resolution)
 	Region->Width = mapSize;
 	Region->Height = mapSize;
 
-	//create data cleanup function
+	//create data cleanup function (UE4 memory management shenanigans here)
 	TFunction<void(uint8 * SrcData, const FUpdateTextureRegion2D * Regions)> DataCleanupFunc =
 		[](uint8* SrcData, const FUpdateTextureRegion2D* Regions) {
 		delete[] SrcData;
@@ -488,6 +408,9 @@ ALand* AAMapGenerator::GenerateTopMesh(TArray<FVector2D> points, int depth)
 		mesh->verts.Add(FVector(x - leftCorner, y - topCorner, depth * heightScale));
 		mesh->uvs.Add(FVector2D(x / (float)mapSize, y / (float)mapSize));
 
+		// Look at the adjacent points on the map grid and if the point is also in the input
+		// TArray of point, connect it. We do that with 2 adjacent neighbours at a time so that we can
+		// set the points in the right order for the tris, the order influencing the side of the normal
 		if (points.Contains(FVector2D(x, y + 1)) && points.Contains(FVector2D(x + 1, y)))
 		{
 			int j = points.Find(FVector2D(x, y + 1));
@@ -529,6 +452,7 @@ ALand* AAMapGenerator::GenerateTopMesh(TArray<FVector2D> points, int depth)
 	return mesh;
 }
 
+// Store edges (stored as a TArray of edge object) as a Tarray of vertices 
 ALand* AAMapGenerator::StoreEdge(ALand* mesh, TArray<FEdgeData> edges)
 {
 	mesh->edges = TArray<FVector>();
@@ -541,6 +465,8 @@ ALand* AAMapGenerator::StoreEdge(ALand* mesh, TArray<FEdgeData> edges)
 	return mesh;
 }
 
+
+// Simple inflation, performed by adding adjacent points to any point if they are not already in the cluster
 void AAMapGenerator::Inflate(TArray<FVector2D>& points)
 {
 	TArray<FVector2D> buffer = TArray<FVector2D>();
@@ -616,6 +542,8 @@ void AAMapGenerator::Inflate(TArray<FVector2D>& points)
 	points.Append(buffer);
 }
 
+
+// Simple erosion. Each point which does not have 4 neighbours is removed
 void AAMapGenerator::Erode(TArray<FVector2D>& points)
 {
 	TArray<FVector2D> buffer = TArray<FVector2D>();
@@ -634,6 +562,7 @@ void AAMapGenerator::Erode(TArray<FVector2D>& points)
 	points = buffer;
 }
 
+// Make sure a point does not exit the map (e.g. because of inflation)
 void AAMapGenerator::clampMap(TArray<FVector2D>& points)
 {
 	int i = 0;
@@ -646,6 +575,9 @@ void AAMapGenerator::clampMap(TArray<FVector2D>& points)
 	}
 }
 
+
+// Disclaimer: major parts of the extrusion process where picked off stackoverflow
+// after hours of fighting faulty normal orientations. This is the case for the following function
 TArray<FEdgeData> AAMapGenerator::BuildEdge(int vertexCount, TArray<int> triangleArray)
 {
 	TArray<FEdgeData> Edges = TArray<FEdgeData>();
@@ -767,6 +699,9 @@ TArray<FEdgeData> AAMapGenerator::BuildEdge(int vertexCount, TArray<int> triangl
 	return compactedEdges;
 }
 
+
+// Disclaimer: major parts of the extrusion process where picked off stackoverflow
+// after hours of fighting faulty normal orientations.This is the case for the following function
 TArray<FEdgeData> AAMapGenerator::BuildManifoldEdge(ALand* mesh)
 {
 	TArray<FEdgeData> edges = AAMapGenerator::BuildEdge(mesh->verts.Num(), mesh->tris);
@@ -783,6 +718,9 @@ TArray<FEdgeData> AAMapGenerator::BuildManifoldEdge(ALand* mesh)
 	return culledEdges;
 }
 
+
+// Disclaimer: major parts of the extrusion process where picked off stackoverflow
+// after hours of fighting faulty normal orientations.This is the case for the following function
 ALand* AAMapGenerator::ExtrudeMesh(ALand* mesh, TArray<float> extrusion, TArray<FEdgeData> edges, bool invertFaces)
 {
 	int extrudedVertexCount = edges.Num() * 2 * extrusion.Num();
@@ -901,6 +839,7 @@ ALand* AAMapGenerator::ExtrudeMesh(ALand* mesh, TArray<float> extrusion, TArray<
 	return mesh;
 }
 
+
 ALand* AAMapGenerator::PerformMeshExtrusion(ALand* mesh, TArray<float> extrusionHeight)
 {
 	TArray<FEdgeData> edges = AAMapGenerator::BuildManifoldEdge(mesh);
@@ -908,11 +847,11 @@ ALand* AAMapGenerator::PerformMeshExtrusion(ALand* mesh, TArray<float> extrusion
 	mesh = AAMapGenerator::StoreEdge(mesh, edges);
 	mesh = AAMapGenerator::ExtrudeMesh(mesh, extrusionHeight, edges, false);
 	mesh = AAMapGenerator::RemoveDuplicateVertices(mesh);
-
 	
 
 	return mesh;
 }
+
 
 ALand* AAMapGenerator::RemoveDuplicateVertices(ALand* mesh)
 {
@@ -957,6 +896,7 @@ ALand* AAMapGenerator::RemoveDuplicateVertices(ALand* mesh)
 	return mesh;
 }
 
+
 ALand* AAMapGenerator::SmoothEdge(ALand* mesh, TArray<FEdgeData> edges)
 {
 	TArray<FVector> smoothedVerts = mesh->verts;
@@ -985,6 +925,7 @@ ALand* AAMapGenerator::SmoothEdge(ALand* mesh, TArray<FEdgeData> edges)
 	return mesh;
 }
 
+
 void AAMapGenerator::GenerateClouds()
 {
 	if (GEngine)
@@ -1003,6 +944,7 @@ void AAMapGenerator::GenerateClouds()
 
 	AAMapGenerator::SpawnClouds();
 }
+
 
 TArray<TArray<FVector2D>> AAMapGenerator::GetContours(TArray<FVector2D> points)
 {
@@ -1125,6 +1067,7 @@ TArray<TArray<FVector2D>> AAMapGenerator::GetContours(TArray<FVector2D> points)
 	return contours;
 }
 
+
 TArray<TArray<FVector2D>> AAMapGenerator::IsolateOutterContours(TArray<TArray<FVector2D>> contours)
 {
 	TArray<int> isInner = TArray<int>();
@@ -1156,6 +1099,8 @@ TArray<TArray<FVector2D>> AAMapGenerator::IsolateOutterContours(TArray<TArray<FV
 	return TArray<TArray<FVector2D>>();
 }
 
+
+// Disclaimer: This method for getting the winding number was ripped off stackoverflow
 int AAMapGenerator::GetWindingNumber(FVector2D point, TArray<FVector2D> contour)
 {
 	int    wn = 0;    // the  winding number counter
@@ -1176,10 +1121,12 @@ int AAMapGenerator::GetWindingNumber(FVector2D point, TArray<FVector2D> contour)
 	return wn;
 }
 
+
 int AAMapGenerator::IsLeft(FVector2D P0, FVector2D P1, FVector2D P2)
 {
 	return ((P1.X - P0.X) * (P2.Y - P0.Y) - (P2.X - P0.X) * (P1.Y - P0.Y));
 }
+
 
 bool AAMapGenerator::IsInner(TArray<int> isInsideContour, int idx)
 {
@@ -1195,6 +1142,7 @@ bool AAMapGenerator::IsInner(TArray<int> isInsideContour, int idx)
 		else
 			return true;
 }
+
 
 void AAMapGenerator::PickLandmarks()
 {
@@ -1271,6 +1219,7 @@ void AAMapGenerator::PickLandmarks()
 		}
 	}
 }
+
 
 void AAMapGenerator::MatchLandToLandmarks()
 {
@@ -1416,6 +1365,7 @@ void AAMapGenerator::GenerateRockAndTrees()
 	}
 }
 
+
 void AAMapGenerator::InitBioms()
 {
 	for (UClass* biom : bioms)
@@ -1441,6 +1391,7 @@ void AAMapGenerator::InitBioms()
 			inGameBioms.Add(newBiom);
 	}
 }
+
 
 uint8* AAMapGenerator::Smooth2DMap(uint8* Data)
 {
@@ -1479,6 +1430,7 @@ uint8* AAMapGenerator::Smooth2DMap(uint8* Data)
 
 	return smoothedData;
 }
+
 
 uint8* AAMapGenerator::Contour2DMap(uint8* Data)
 {
@@ -1535,6 +1487,7 @@ uint8* AAMapGenerator::Contour2DMap(uint8* Data)
 
 	return smoothedData;
 }
+
 
 //Implements a nearest neighbour rescaling of the data
 uint8* AAMapGenerator::ResampleMap(uint8* Data, int originalRes, int newRes)
